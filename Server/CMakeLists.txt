@@ -15,8 +15,8 @@ add_definitions(-DASIO_HAS_STD_CHRONO)
 add_definitions(-DASIO_HAS_CSTDINT)
 add_definitions(-DASIO_HAS_STD_TYPE_TRAITS)
 add_definitions(-std=c++11)
-include_directories(SYSTEM /Users/oceancx/SimpleEngine/external/asio/asio/include)
-
+#include_directories(SYSTEM /Users/oceancx/SimpleEngine/external/asio/asio/include)
+include_directories(SYSTEM F:/Github/SimpleEngine/external/asio/asio/include)
 
 add_executable(${PROJECT_NAME}
 	main.cpp

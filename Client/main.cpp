@@ -29,7 +29,8 @@ struct MoveInfo
 	char body_[512];
 	int body_length_;
 
-	MoveInfo():info("中国人")
+	MoveInfo()
+		:info("new chinese")
 	{
 		pid = 0;
 		src.x = 12;

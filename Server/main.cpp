@@ -26,14 +26,15 @@ struct MoveInfo
 	char body_[512];
 	int body_length_;
 
-	MoveInfo():info("中国人")
+	MoveInfo()
+		:info("new chinese")
 	{
 		pid = 0;
 		src.x = 12;
 		src.y = 123;
 		dest.x = 33;
 		dest.y = 90;
-
+		
 	}
 	
 	void encode()
@@ -133,17 +134,17 @@ istream & operator>>(istream &in,MoveInfo& obj)
 
 
 
-class message
+class Message
 {
 public:
-	enum 
+	enum
 	{
 		HEADER_LEN = 4,
 		MAX_BODY_LEN = 512
 	};
 
-	message() 
-	:body_length_(0)
+	Message()
+		:body_length_(0)
 	{
 
 	}
@@ -166,9 +167,9 @@ public:
 	{
 		return data_ + HEADER_LEN;
 	}
-	char* body() 
+	char* body()
 	{
-		return data_+ HEADER_LEN;
+		return data_ + HEADER_LEN;
 	}
 
 	std::size_t body_length() const
@@ -185,10 +186,10 @@ public:
 
 	bool decode_header()
 	{
-		char header[HEADER_LEN +  1] = "";
-		std::strncat(header,data_,HEADER_LEN);
+		char header[HEADER_LEN + 1] = "";
+		std::strncat(header, data_, HEADER_LEN);
 		body_length_ = std::atoi(header);
-		if( body_length_ > MAX_BODY_LEN)
+		if (body_length_ > MAX_BODY_LEN)
 		{
 			body_length_ = 0;
 			return false;
@@ -199,8 +200,8 @@ public:
 	void encode_header()
 	{
 		char header[HEADER_LEN + 1] = "";
-		std::sprintf(header,"%4d",static_cast<int>(body_length_));
-		std::memcpy(data_,header,HEADER_LEN);
+		std::sprintf(header, "%4d", static_cast<int>(body_length_));
+		std::memcpy(data_, header, HEADER_LEN);
 	}
 
 private:
@@ -209,75 +210,170 @@ private:
 
 };
 
-class session
-: public std::enable_shared_from_this<session>
+
+
+typedef std::deque<Message> MessageQueue;
+
+//----------------------------------------------------------------------
+
+class Participant
 {
 public:
-	session(tcp::socket socket)
-	: socket_(std::move(socket))
+	virtual ~Participant() {}
+	virtual void deliver(const Message& msg) = 0;
+};
+
+typedef std::shared_ptr<Participant> ParticipantPtr;
+
+class Room
+{
+public:
+	void join(ParticipantPtr participant)
+	{
+		participants_.insert(participant);
+		for (auto msg : recent_msgs_)
+			participant->deliver(msg);
+	}
+
+	void leave(ParticipantPtr participant)
+	{
+		participants_.erase(participant);
+	}
+
+	void deliver(const Message& msg)
+	{
+		recent_msgs_.push_back(msg);
+		while (recent_msgs_.size() > max_recent_msgs)
+			recent_msgs_.pop_front();
+
+		for (auto participant : participants_)
+			participant->deliver(msg);
+	}
+
+private:
+	std::set<ParticipantPtr> participants_;
+	enum { max_recent_msgs = 100 };
+	MessageQueue recent_msgs_;
+};
+
+class Session
+	: public Participant,
+	public std::enable_shared_from_this<Session>
+{
+public:
+	Session(tcp::socket socket, Room& room)
+		: socket_(std::move(socket)),
+		room_(room)
 	{
 	}
 
 	void start()
 	{
-		do_read();
+		room_.join(shared_from_this());
+		do_read_header();
 	}
-
-private:
-	void do_read()
+	void deliver(const Message& msg)
 	{
-		auto self(shared_from_this());
-		socket_.async_read_some(asio::buffer(data_, max_length),
-			[this, self](std::error_code ec, std::size_t length)
-			{
-				if (!ec)
-				{
-					message msg;	
-					std::memcpy(msg.data(), data_, length);
-					msg.decode_header();
-
-					MoveInfo info;
-					std::memcpy(info.body(), msg.body(), msg.body_length());
-					info.body_length(msg.body_length());
-					info.decode();
-
-					std::cout <<"receie ok : "<< info <<std::endl;
-
-					// std::cout << "receive msg len:" << length <<std::endl;
-					// std::cout.write(msg.body(), msg.body_length());
-            		// std::cout << "\n";
-
-					do_write(length);
-				}
-			});
-	}
-
-	void do_write(std::size_t length)
-	{
-		auto self(shared_from_this());
-		asio::async_write(socket_, asio::buffer(data_, length),
-        [this, self](std::error_code ec, std::size_t /*length*/)
+		bool write_in_progress = !write_msgs_.empty();
+		write_msgs_.push_back(msg);
+		if (!write_in_progress)
 		{
-			if (!ec)
+			do_write();
+		}
+	}
+private:
+
+	void do_read_header()
+	{
+		auto self(shared_from_this());
+		asio::async_read(socket_,
+			asio::buffer(read_msg_.data(), Message::HEADER_LEN),
+			[this, self](std::error_code ec, std::size_t /*length*/)
+		{
+			if (!ec && read_msg_.decode_header())
 			{
-				do_read();
+				do_read_body();
+			}
+			else
+			{
+				room_.leave(shared_from_this());
 			}
 		});
 	}
 
+	void do_read_body()
+	{
+		auto self(shared_from_this());
+		asio::async_read(socket_,
+			asio::buffer(read_msg_.body(), read_msg_.body_length()),
+			[this, self](std::error_code ec, std::size_t /*length*/)
+		{
+			if (!ec)
+			{
+				/*message msg;
+				std::memcpy(msg.data(), data_, length);
+				msg.decode_header();
+
+				MoveInfo info;
+				std::memcpy(info.body(), msg.body(), msg.body_length());
+				info.body_length(msg.body_length());
+				info.decode();
+
+				std::cout << "receie ok : " << info << std::endl;*/
+
+				room_.deliver(read_msg_);
+				do_read_header();
+			}
+			else
+			{
+				room_.leave(shared_from_this());
+			}
+		});
+	}
+
+
+
+	void do_write()
+	{
+		auto self(shared_from_this());
+		asio::async_write(socket_,
+			asio::buffer(write_msgs_.front().data(),
+				write_msgs_.front().length()),
+			[this, self](std::error_code ec, std::size_t /*length*/)
+		{
+			if (!ec)
+			{
+				write_msgs_.pop_front();
+				if (!write_msgs_.empty())
+				{
+					do_write();
+				}
+			}
+			else
+			{
+				room_.leave(shared_from_this());
+			}
+		});
+	}
+
+
 	tcp::socket socket_;
-	enum { max_length = 1024 };
-	char data_[max_length];
+	Room& room_;
+	Message read_msg_;
+	MessageQueue write_msgs_;
+
 };
 
-class server
+class Server
 {
 public:
-	server(asio::io_context& io_context, short port)
-	: acceptor_(io_context, tcp::endpoint(tcp::v4(), port))
+	Server(asio::io_context& io_context,
+		const tcp::endpoint& endpoint)
+		: acceptor_(io_context, endpoint)
 	{
 		do_accept();
 	}
+
 
 private:
 	void do_accept()
@@ -288,7 +384,7 @@ private:
 				if (!ec)
 				{
 					std::cout <<"new connection!" << std::endl;
-					std::make_shared<session>(std::move(socket))->start();
+					std::make_shared<Session>(std::move(socket) , room_)->start();
 				}
 
 				do_accept();
@@ -296,21 +392,27 @@ private:
 	}
 
 	tcp::acceptor acceptor_;
+	Room room_;
 };
 
 int main(int argc,char* argv[])
 {	
 	try
 	{
-		if (argc != 2)
+		if (argc < 2)
 		{
-			std::cerr << "Usage: async_tcp_echo_server <port>\n";
+			std::cerr << "Usage: chat_server <port> [<port> ...]\n";
 			return 1;
 		}
 
 		asio::io_context io_context;
 
-		server s(io_context, std::atoi(argv[1]));
+		std::list<Server> servers;
+		for (int i = 1; i < argc; ++i)
+		{
+			tcp::endpoint endpoint(tcp::v4(), std::atoi(argv[i]));
+			servers.emplace_back(io_context, endpoint);
+		}
 
 		io_context.run();
 	}

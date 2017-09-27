@@ -231,8 +231,8 @@ public:
 	void join(ParticipantPtr participant)
 	{
 		participants_.insert(participant);
-		for (auto msg : recent_msgs_)
-			participant->deliver(msg);
+	/*	for (auto msg : recent_msgs_)
+			participant->deliver(msg);*/
 	}
 
 	void leave(ParticipantPtr participant)
